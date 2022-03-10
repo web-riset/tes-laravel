@@ -1,51 +1,62 @@
-FROM php:7.4-apache
+FROM php:8.0-fpm
 
-# Install packages
+# Set working directory
+WORKDIR /var/www
+
+# Add docker php ext repo
+ADD https://github.com/mlocati/docker-php-extension-installer/releases/latest/download/install-php-extensions /usr/local/bin/
+
+# Install php extensions
+RUN chmod +x /usr/local/bin/install-php-extensions && sync && \
+    install-php-extensions mbstring pdo_mysql zip exif pcntl gd memcached
+
+# Install dependencies
 RUN apt-get update && apt-get install -y \
-    git \
-    zip \
-    curl \
-    sudo \
-    unzip \
-    libicu-dev \
-    libbz2-dev \
+    build-essential \
     libpng-dev \
-    libjpeg-dev \
-    libmcrypt-dev \
-    libreadline-dev \
+    libjpeg62-turbo-dev \
     libfreetype6-dev \
-    g++
+    locales \
+    zip \
+    jpegoptim optipng pngquant gifsicle \
+    unzip \
+    git \
+    curl \
+    lua-zlib-dev \
+    libmemcached-dev \
+    nginx
 
-# Apache configuration
-ENV APACHE_DOCUMENT_ROOT=/var/www/html/public
-RUN sed -ri -e 's!/var/www/html!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/sites-available/*.conf
-RUN sed -ri -e 's!/var/www/!${APACHE_DOCUMENT_ROOT}!g' /etc/apache2/apache2.conf /etc/apache2/conf-available/*.conf
-RUN a2enmod rewrite headers
+# Install supervisor
+RUN apt-get install -y supervisor
 
-# Common PHP Extensions
-RUN docker-php-ext-install \
-    bz2 \
-    intl \
-    iconv \
-    bcmath \
-    opcache \
-    calendar \
-    pdo_mysql
+# Install composer
+RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
 
-# Ensure PHP logs are captured by the container
-ENV LOG_CHANNEL=stderr
+# Clear cache
+RUN apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Set a volume mount point for your code
-VOLUME /var/www/html
+# Add user for laravel application
+RUN groupadd -g 1000 www
+RUN useradd -u 1000 -ms /bin/bash -g www www
 
-# Copy code and run composer
-COPY --from=composer:latest /usr/bin/composer /usr/bin/composer
-COPY . /var/www/tmp
-RUN cd /var/www/tmp && composer install --no-dev
+# Copy code to /var/www
+COPY --chown=www:www-data . /var/www
 
-# Ensure the entrypoint file can be run
-RUN chmod +x /var/www/tmp/docker-entrypoint.sh
-ENTRYPOINT ["/var/www/tmp/docker-entrypoint.sh"]
+# add root to www group
+RUN chmod -R ug+w /var/www/storage
 
-# The default apache run command
-CMD ["apache2-foreground"]
+# Copy nginx/php/supervisor configs
+RUN cp docker/supervisor.conf /etc/supervisord.conf
+RUN cp docker/php.ini /usr/local/etc/php/conf.d/app.ini
+RUN cp docker/nginx.conf /etc/nginx/sites-enabled/default
+
+# PHP Error Log Files
+RUN mkdir /var/log/php
+RUN touch /var/log/php/errors.log && chmod 777 /var/log/php/errors.log
+
+# Deployment steps
+RUN composer install --optimize-autoloader --no-dev
+RUN chmod +x /var/www/docker/run.sh
+
+EXPOSE 80
+ENTRYPOINT ["/var/www/docker/run.sh"]
